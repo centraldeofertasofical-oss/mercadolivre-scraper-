@@ -1,7 +1,11 @@
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 import { buildHeaders } from '../utils/headers.js';
-import { cleanText, toNumberBR, extractMLB } from '../utils/normalize.js';
+import {
+  cleanText,
+  toNumberBR,
+  normalizeMercadoLivreLink,
+} from '../utils/normalize.js';
 import { isValidProduct, dedupeProducts } from '../utils/validator.js';
 import { settings } from '../config/settings.js';
 import { logInfo, logError } from '../utils/logger.js';
@@ -79,8 +83,6 @@ function pickBestCurrentPrice(card) {
     if (value && value > 0) return value;
   }
 
-  // Fallback: pega o menor valor plausível entre blocos monetários do card,
-  // ignorando parcelas e textos de crédito.
   const candidates = [];
   card.find('.andes-money-amount').each((_, el) => {
     const block = card.find(el);
@@ -118,7 +120,6 @@ function pickBestOldPrice(card, currentPrice = null) {
     if (value && value > 0) return value;
   }
 
-  // Fallback: maior preço plausível do card que seja maior que o preço atual.
   const candidates = [];
   card.find('.andes-money-amount').each((_, el) => {
     const value = parseMoneyNode(card.find(el));
@@ -135,8 +136,6 @@ function parsePriceBlock(card) {
   let currentPrice = pickBestCurrentPrice(card);
   let oldPrice = pickBestOldPrice(card, currentPrice);
 
-  // Heurística de segurança:
-  // se os preços vierem invertidos por causa do DOM, corrige.
   if (currentPrice && oldPrice && currentPrice > oldPrice) {
     const min = Math.min(currentPrice, oldPrice);
     const max = Math.max(currentPrice, oldPrice);
@@ -151,11 +150,14 @@ function inferCategory(title = '', link = '') {
   const source = `${title} ${link}`.toLowerCase();
 
   if (/(galaxy|smartphone|iphone|motorola|xiaomi|celular)/.test(source)) return 'celular';
-  if (/(whey|creatina|protein|hipercalorico|mass)/.test(source)) return 'suplementos';
-  if (/(tenis|camiseta|cueca|meia|chinelo|mochila)/.test(source)) return 'moda';
-  if (/(air fryer|fritadeira|cooktop|forno|panela|taças|espelho|ventilador|cuba)/.test(source)) return 'casa';
-  if (/(furadeira|parafusadeira|cabo flexivel|solda|lava jato)/.test(source)) return 'ferramentas';
-  if (/(escova|aparador|máscara capilar)/.test(source)) return 'beleza';
+  if (/(whey|creatina|protein|hipercalorico|mass|omega)/.test(source)) return 'suplementos';
+  if (/(tenis|tênis|camiseta|cueca|meia|chinelo|mochila|camisa|polo)/.test(source)) return 'moda';
+  if (/(air fryer|fritadeira|cooktop|forno|panela|taças|tacas|espelho|ventilador|cuba|liquidificador)/.test(source)) return 'casa';
+  if (/(furadeira|parafusadeira|cabo flexivel|cabo flexível|solda|lava jato)/.test(source)) return 'ferramentas';
+  if (/(escova|aparador|máscara capilar|mascara capilar|barbeador)/.test(source)) return 'beleza';
+  if (/(smartwatch|power bank|carregador|iphone|ipad|usb-c)/.test(source)) return 'acessorios_celular';
+  if (/(tv|smart tv)/.test(source)) return 'tv';
+  if (/(monitor|baba eletronica|babá eletrônica)/.test(source)) return 'monitor';
 
   return 'outros';
 }
@@ -181,11 +183,12 @@ function parseOffers(html, sourceUrl, page) {
         'h3',
       ]) || null;
 
-    const link = normalizeLink(
+    const rawLink = normalizeLink(
       attrFromFirst(card, [
         'a.poly-component__title',
         'a[href*="/p/"]',
         'a[href*="MLB"]',
+        'a[href*="MLBU"]',
       ], 'href')
     );
 
@@ -199,6 +202,7 @@ function parseOffers(html, sourceUrl, page) {
       attrFromFirst(card, ['img[data-srcset]'], 'data-srcset')
     );
 
+    const normalized = normalizeMercadoLivreLink(rawLink, title, image);
     const { currentPrice, oldPrice } = parsePriceBlock(card);
 
     const discountText =
@@ -223,11 +227,9 @@ function parseOffers(html, sourceUrl, page) {
       descontoPct = Math.round(((precoDe - precoPor) / precoDe) * 100);
     }
 
-    // Bloqueios de sanidade para evitar PRECO_DE absurdamente inflado
     if (precoDe && precoPor) {
       const ratio = precoDe / precoPor;
 
-      // Evita capturar parcela/preço de crédito como preço antigo
       if (ratio > 5) {
         precoDe = null;
       }
@@ -242,12 +244,16 @@ function parseOffers(html, sourceUrl, page) {
     }
 
     const product = {
-      ID: extractMLB(link),
+      ID: normalized.canonicalId,
+      GROUP_ID: normalized.groupId,
+      VARIATION_ID: normalized.rawIds.upId || normalized.rawIds.listingId || null,
+      CATALOG_ID: normalized.rawIds.catalogId || null,
       PLATAFORMA: 'Mercado Livre',
       ORIGEM: 'OFERTAS',
       PAGINA: Number(page),
       PRODUTO: title,
-      LINK_ORIGINAL: link,
+      LINK_ORIGINAL: normalized.canonicalLink,
+      LINK_COLETADO: rawLink,
       LINK_AFILIADO: null,
       LINK_IMAGEM: image,
       PRECO_DE: precoDe,
@@ -255,7 +261,7 @@ function parseOffers(html, sourceUrl, page) {
       DESCONTO_PCT: descontoPct,
       URL_COLETA: sourceUrl,
       DATA_COLETA: new Date().toISOString(),
-      CATEGORIA: inferCategory(title, link),
+      CATEGORIA: inferCategory(title, rawLink),
     };
 
     if (isValidProduct(product)) {
