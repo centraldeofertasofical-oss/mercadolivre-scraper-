@@ -155,9 +155,12 @@ function inferCategory(title = '', link = '') {
   if (/(air fryer|fritadeira|cooktop|forno|panela|taças|tacas|espelho|ventilador|cuba|liquidificador)/.test(source)) return 'casa';
   if (/(furadeira|parafusadeira|cabo flexivel|cabo flexível|solda|lava jato)/.test(source)) return 'ferramentas';
   if (/(escova|aparador|máscara capilar|mascara capilar|barbeador)/.test(source)) return 'beleza';
-  if (/(smartwatch|power bank|carregador|iphone|ipad|usb-c)/.test(source)) return 'acessorios_celular';
-  if (/(tv|smart tv)/.test(source)) return 'tv';
-  if (/(monitor|baba eletronica|babá eletrônica)/.test(source)) return 'monitor';
+  if (/(smartwatch|power bank|carregador|usb-c|magsafe)/.test(source)) return 'acessorios_celular';
+  if (/(smart tv|tv\b)/.test(source)) return 'tv';
+  if (/(monitor|suporte articulado)/.test(source)) return 'monitor';
+  if (/(caixa de som|boombox|soundbar|home theater)/.test(source)) return 'audio_video';
+  if (/(notebook|teclado|mouse|roteador|wifi|wi-fi|mesh|impressora|inalador)/.test(source)) return 'informatica';
+  if (/(lavadora lava jato|automotivo|carro|moto)/.test(source)) return 'automotivo';
 
   return 'outros';
 }
@@ -244,23 +247,29 @@ function parseOffers(html, sourceUrl, page) {
     }
 
     const product = {
-      ID: normalized.canonicalId,
+      ID: normalized.canonicalId || normalized.groupId,
       GROUP_ID: normalized.groupId,
-      VARIATION_ID: normalized.rawIds.upId || normalized.rawIds.listingId || null,
-      CATALOG_ID: normalized.rawIds.catalogId || null,
+      VARIATION_ID: normalized.variationId,
+      CATALOG_ID: normalized.catalogId,
+
       PLATAFORMA: 'Mercado Livre',
       ORIGEM: 'OFERTAS',
       PAGINA: Number(page),
+
       PRODUTO: title,
       LINK_ORIGINAL: normalized.canonicalLink,
       LINK_COLETADO: rawLink,
+
       LINK_AFILIADO: null,
       LINK_IMAGEM: image,
+
       PRECO_DE: precoDe,
       PRECO_POR: precoPor,
       DESCONTO_PCT: descontoPct,
+
       URL_COLETA: sourceUrl,
       DATA_COLETA: new Date().toISOString(),
+
       CATEGORIA: inferCategory(title, rawLink),
     };
 
