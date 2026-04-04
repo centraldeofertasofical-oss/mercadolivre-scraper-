@@ -8,11 +8,9 @@ import { logInfo, logError } from '../utils/logger.js';
 
 function buildOffersUrl(page = 1) {
   const pageNumber = Number(page);
-
   if (!pageNumber || pageNumber <= 1) {
     return 'https://www.mercadolivre.com.br/ofertas';
   }
-
   return `https://www.mercadolivre.com.br/ofertas?page=${pageNumber}`;
 }
 
@@ -27,48 +25,139 @@ function extractDiscountNumber(discountText = '') {
 
 function normalizeImage(url = '') {
   if (!url) return null;
+  return String(url)
+    .split('?')[0]
+    .trim();
+}
+
+function normalizeLink(url = '') {
+  if (!url) return null;
   return String(url).split('?')[0].trim();
 }
 
+function textFromFirst(card, selectors = []) {
+  for (const selector of selectors) {
+    const text = cleanText(card.find(selector).first().text());
+    if (text) return text;
+  }
+  return null;
+}
+
+function attrFromFirst(card, selectors = [], attr = 'href') {
+  for (const selector of selectors) {
+    const value = cleanText(card.find(selector).first().attr(attr) || '');
+    if (value) return value;
+  }
+  return null;
+}
+
+function parseMoneyNode(node) {
+  if (!node || !node.length) return null;
+
+  const fraction = cleanText(node.find('.andes-money-amount__fraction').first().text());
+  const cents = cleanText(node.find('.andes-money-amount__cents').first().text());
+
+  if (!fraction) {
+    const raw = cleanText(node.text());
+    return raw ? toNumberBR(raw) : null;
+  }
+
+  return toNumberBR(cents ? `${fraction},${cents}` : fraction);
+}
+
+function pickBestCurrentPrice(card) {
+  const candidateSelectors = [
+    '.poly-price__current .andes-money-amount',
+    '.poly-price__current',
+    '.ui-search-price__second-line .andes-money-amount',
+    '.ui-search-price__part .andes-money-amount',
+    '.ui-search-price__part',
+  ];
+
+  for (const selector of candidateSelectors) {
+    const value = parseMoneyNode(card.find(selector).first());
+    if (value && value > 0) return value;
+  }
+
+  // Fallback: pega o menor valor plausível entre blocos monetários do card,
+  // ignorando parcelas e textos de crédito.
+  const candidates = [];
+  card.find('.andes-money-amount').each((_, el) => {
+    const block = card.find(el);
+    const context = cleanText(block.parent().text()).toLowerCase();
+
+    if (
+      context.includes('sem juros') ||
+      context.includes('linha de crédito') ||
+      context.includes('parcel') ||
+      context.includes('mensal') ||
+      context.includes('no pix')
+    ) {
+      return;
+    }
+
+    const value = parseMoneyNode(block);
+    if (value && value > 0) candidates.push(value);
+  });
+
+  if (!candidates.length) return null;
+  return Math.min(...candidates);
+}
+
+function pickBestOldPrice(card, currentPrice = null) {
+  const candidateSelectors = [
+    '.poly-price__previous .andes-money-amount',
+    '.poly-price__previous',
+    '.andes-money-amount--previous',
+    '.ui-search-price__original-value .andes-money-amount',
+    '.ui-search-price__original-value',
+  ];
+
+  for (const selector of candidateSelectors) {
+    const value = parseMoneyNode(card.find(selector).first());
+    if (value && value > 0) return value;
+  }
+
+  // Fallback: maior preço plausível do card que seja maior que o preço atual.
+  const candidates = [];
+  card.find('.andes-money-amount').each((_, el) => {
+    const value = parseMoneyNode(card.find(el));
+    if (!value || value <= 0) return;
+    if (currentPrice && value <= currentPrice) return;
+    candidates.push(value);
+  });
+
+  if (!candidates.length) return null;
+  return Math.max(...candidates);
+}
+
 function parsePriceBlock(card) {
-  const fractions = card.find('.andes-money-amount__fraction');
-  const centsList = card.find('.andes-money-amount__cents');
+  let currentPrice = pickBestCurrentPrice(card);
+  let oldPrice = pickBestOldPrice(card, currentPrice);
 
-  let currentPrice = null;
-  let oldPrice = null;
-
-  if (fractions.length >= 1) {
-    const currentFraction = cleanText(card.find('.andes-money-amount__fraction').first().text());
-    const currentCents = cleanText(card.find('.andes-money-amount__cents').first().text());
-
-    if (currentFraction) {
-      currentPrice = toNumberBR(
-        currentCents ? `${currentFraction},${currentCents}` : currentFraction
-      );
-    }
+  // Heurística de segurança:
+  // se os preços vierem invertidos por causa do DOM, corrige.
+  if (currentPrice && oldPrice && currentPrice > oldPrice) {
+    const min = Math.min(currentPrice, oldPrice);
+    const max = Math.max(currentPrice, oldPrice);
+    currentPrice = min;
+    oldPrice = max;
   }
 
-  if (fractions.length >= 2) {
-    const oldFraction = cleanText(fractions.eq(1).text());
-    const oldCents = cleanText(centsList.eq(1).text());
+  return { currentPrice, oldPrice };
+}
 
-    if (oldFraction) {
-      oldPrice = toNumberBR(oldCents ? `${oldFraction},${oldCents}` : oldFraction);
-    }
-  }
+function inferCategory(title = '', link = '') {
+  const source = `${title} ${link}`.toLowerCase();
 
-  const previousWrapperText = cleanText(
-    card.find('.andes-money-amount--previous').first().text()
-  );
+  if (/(galaxy|smartphone|iphone|motorola|xiaomi|celular)/.test(source)) return 'celular';
+  if (/(whey|creatina|protein|hipercalorico|mass)/.test(source)) return 'suplementos';
+  if (/(tenis|camiseta|cueca|meia|chinelo|mochila)/.test(source)) return 'moda';
+  if (/(air fryer|fritadeira|cooktop|forno|panela|taças|espelho|ventilador|cuba)/.test(source)) return 'casa';
+  if (/(furadeira|parafusadeira|cabo flexivel|solda|lava jato)/.test(source)) return 'ferramentas';
+  if (/(escova|aparador|máscara capilar)/.test(source)) return 'beleza';
 
-  if (!oldPrice && previousWrapperText) {
-    oldPrice = toNumberBR(previousWrapperText);
-  }
-
-  return {
-    currentPrice,
-    oldPrice
-  };
+  return 'outros';
 }
 
 function parseOffers(html, sourceUrl, page) {
@@ -77,8 +166,7 @@ function parseOffers(html, sourceUrl, page) {
 
   const selectors = [
     'li.ui-search-layout__item',
-    'div.andes-card',
-    'div.poly-card'
+    'div.poly-card',
   ];
 
   const cards = $(selectors.join(','));
@@ -87,36 +175,70 @@ function parseOffers(html, sourceUrl, page) {
     const card = $(el);
 
     const title =
-      cleanText(
-        card.find('h3, .poly-component__title, .ui-search-item__title').first().text()
-      ) || null;
+      textFromFirst(card, [
+        '.poly-component__title',
+        '.ui-search-item__title',
+        'h3',
+      ]) || null;
 
-    const link =
-      card.find('a[href*="MLB"], a[href*="/p/"]').first().attr('href') || null;
+    const link = normalizeLink(
+      attrFromFirst(card, [
+        'a.poly-component__title',
+        'a[href*="/p/"]',
+        'a[href*="MLB"]',
+      ], 'href')
+    );
 
-    const image =
-      card.find('img').first().attr('src') ||
-      card.find('img').first().attr('data-src') ||
-      card.find('img').first().attr('data-srcset') ||
-      null;
+    const image = normalizeImage(
+      attrFromFirst(card, [
+        'img[data-src]',
+        'img[data-srcset]',
+        'img[src]',
+      ], 'src') ||
+      attrFromFirst(card, ['img[data-src]'], 'data-src') ||
+      attrFromFirst(card, ['img[data-srcset]'], 'data-srcset')
+    );
 
     const { currentPrice, oldPrice } = parsePriceBlock(card);
 
     const discountText =
-      cleanText(
-        card.find('.andes-money-amount__discount, .ui-search-price__discount').first().text()
-      ) || null;
+      textFromFirst(card, [
+        '.andes-money-amount__discount',
+        '.ui-search-price__discount',
+        '.poly-price__discount',
+      ]) || null;
 
     let descontoPct = extractDiscountNumber(discountText);
+    let precoPor = currentPrice;
     let precoDe = oldPrice;
-    const precoPor = currentPrice;
+
+    if ((!precoDe || precoDe <= precoPor) && descontoPct && precoPor) {
+      const calculated = precoPor / (1 - descontoPct / 100);
+      if (Number.isFinite(calculated) && calculated > precoPor) {
+        precoDe = Number(calculated.toFixed(2));
+      }
+    }
 
     if ((!descontoPct || descontoPct <= 0) && precoDe && precoPor && precoDe > precoPor) {
       descontoPct = Math.round(((precoDe - precoPor) / precoDe) * 100);
     }
 
-    if ((!precoDe || precoDe <= precoPor) && descontoPct && precoPor) {
-      precoDe = Number((precoPor / (1 - descontoPct / 100)).toFixed(2));
+    // Bloqueios de sanidade para evitar PRECO_DE absurdamente inflado
+    if (precoDe && precoPor) {
+      const ratio = precoDe / precoPor;
+
+      // Evita capturar parcela/preço de crédito como preço antigo
+      if (ratio > 5) {
+        precoDe = null;
+      }
+
+      if (precoDe && precoDe <= precoPor) {
+        precoDe = null;
+      }
+    }
+
+    if (descontoPct && (descontoPct <= 0 || descontoPct > 90)) {
+      descontoPct = null;
     }
 
     const product = {
@@ -127,12 +249,13 @@ function parseOffers(html, sourceUrl, page) {
       PRODUTO: title,
       LINK_ORIGINAL: link,
       LINK_AFILIADO: null,
-      LINK_IMAGEM: normalizeImage(image),
+      LINK_IMAGEM: image,
       PRECO_DE: precoDe,
       PRECO_POR: precoPor,
       DESCONTO_PCT: descontoPct,
       URL_COLETA: sourceUrl,
-      DATA_COLETA: new Date().toISOString()
+      DATA_COLETA: new Date().toISOString(),
+      CATEGORIA: inferCategory(title, link),
     };
 
     if (isValidProduct(product)) {
@@ -148,12 +271,12 @@ export async function scrapeMercadoLivreOffers({ page = 1 }) {
 
   logInfo('Coletando página de ofertas', {
     page: Number(page),
-    url: finalUrl
+    url: finalUrl,
   });
 
   const response = await axios.get(finalUrl, {
     headers: buildHeaders(),
-    timeout: settings.requestTimeout
+    timeout: settings.requestTimeout,
   });
 
   const products = parseOffers(response.data, finalUrl, page);
@@ -164,7 +287,7 @@ export async function scrapeMercadoLivreOffers({ page = 1 }) {
     url: finalUrl,
     page: Number(page),
     total: products.length,
-    products
+    products,
   };
 }
 
@@ -182,24 +305,19 @@ export async function scrapeMercadoLivreOffersRange({ start = 1, end = 20 }) {
   for (let page = startPage; page <= endPage; page++) {
     try {
       const result = await scrapeMercadoLivreOffers({ page });
-
       allProducts.push(...result.products);
-      pages.push({
-        page,
-        total: result.total,
-        ok: true
-      });
+      pages.push({ page, total: result.total, ok: true });
 
       logInfo('Página processada com sucesso', {
         page,
-        total: result.total
+        total: result.total,
       });
     } catch (error) {
       pages.push({
         page,
         total: 0,
         ok: false,
-        error: error?.message || 'Erro desconhecido'
+        error: error?.message || 'Erro desconhecido',
       });
 
       logError(`Erro ao processar página ${page}`, error?.message || error);
@@ -220,6 +338,6 @@ export async function scrapeMercadoLivreOffersRange({ start = 1, end = 20 }) {
     pages_processed: pages.length,
     total: deduped.length,
     pages,
-    products: deduped
+    products: deduped,
   };
 }
