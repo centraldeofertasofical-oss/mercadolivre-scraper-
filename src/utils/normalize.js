@@ -19,7 +19,68 @@ export function toNumberBR(value) {
   return Number.isFinite(number) ? Number(number.toFixed(2)) : null;
 }
 
+export function cleanUrl(url = '') {
+  return String(url || '').split('?')[0].trim();
+}
+
+export function slugify(value = '') {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-|-$)/g, '')
+    .trim();
+}
+
+export function extractIdsFromUrl(url = '') {
+  const clean = cleanUrl(url);
+
+  const catalogMatch = clean.match(/\/p\/(MLB\d+)/i);
+  const listingMatch = clean.match(/MLB-?(\d{6,})/i);
+  const upMatch = clean.match(/(MLBU\d+)/i);
+
+  return {
+    catalogId: catalogMatch ? catalogMatch[1].toUpperCase() : null,
+    listingId: listingMatch ? `MLB${listingMatch[1]}` : null,
+    upId: upMatch ? upMatch[1].toUpperCase() : null,
+  };
+}
+
+export function normalizeMercadoLivreLink(url = '', title = '', image = '') {
+  const clean = cleanUrl(url);
+  const { catalogId, listingId, upId } = extractIdsFromUrl(clean);
+
+  let canonicalId = null;
+  let canonicalLink = clean;
+
+  if (catalogId) {
+    canonicalId = catalogId;
+    canonicalLink = `https://www.mercadolivre.com.br/p/${catalogId}`;
+  } else if (listingId) {
+    canonicalId = listingId;
+    canonicalLink = `https://produto.mercadolivre.com.br/${listingId.replace('MLB', 'MLB-')}`;
+  } else if (upId) {
+    canonicalId = upId;
+  }
+
+  let groupId = catalogId || listingId || null;
+
+  if (!groupId) {
+    const titleKey = slugify(title).slice(0, 80) || 'sem-titulo';
+    const imageKey = cleanUrl(image).split('/').pop()?.replace(/\.[a-z]+$/i, '') || 'sem-img';
+    groupId = `MLGROUP-${titleKey}-${imageKey}`;
+  }
+
+  return {
+    canonicalId,
+    canonicalLink,
+    groupId,
+    rawIds: { catalogId, listingId, upId },
+  };
+}
+
 export function extractMLB(link = '') {
-  const match = String(link).match(/MLB-?(\d+)/i);
-  return match ? `MLB${match[1]}` : null;
+  const normalized = normalizeMercadoLivreLink(link);
+  return normalized.canonicalId || normalized.rawIds.upId || null;
 }
