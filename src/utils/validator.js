@@ -5,8 +5,31 @@ export function isValidProduct(product) {
   if (!product.PRODUTO) return false;
   if (!product.LINK_ORIGINAL) return false;
   if (!product.GROUP_ID) return false;
-  if (!product.PRECO_POR || product.PRECO_POR <= 0) return false;
+  if (product.PRECO_POR === null || product.PRECO_POR === undefined) return false;
+  if (product.PRECO_POR <= 0) return false;
   return true;
+}
+
+function scoreProduct(product) {
+  let score = 0;
+
+  // prioridade para catálogo
+  if (product.CATALOG_ID) score += 100;
+
+  // depois anúncio MLB
+  if (product.ID && /^MLB\d+$/i.test(product.ID)) score += 25;
+
+  // menor preço ganha dentro do mesmo grupo
+  if (product.PRECO_POR && product.PRECO_POR > 0) {
+    score += 50 / product.PRECO_POR;
+  }
+
+  // páginas menores tendem a aparecer antes
+  if (product.PAGINA) {
+    score += Math.max(0, 20 - Number(product.PAGINA));
+  }
+
+  return score;
 }
 
 export function dedupeProducts(products = []) {
@@ -28,12 +51,7 @@ export function dedupeProducts(products = []) {
       continue;
     }
 
-    const score = (p) =>
-      (p.CATALOG_ID ? 100 : 0) +
-      (p.ID?.startsWith('MLB') ? 20 : 0) +
-      (p.PAGINA ? Math.max(0, 20 - p.PAGINA) : 0);
-
-    if (score(product) > score(current)) {
+    if (scoreProduct(product) > scoreProduct(current)) {
       grouped.set(key, product);
     }
   }
