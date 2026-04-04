@@ -54,21 +54,27 @@ export function normalizeMercadoLivreLink(url = '', title = '', image = '') {
   let canonicalId = null;
   let canonicalLink = clean;
 
+  // prioridade máxima: catálogo /p/MLB...
   if (catalogId) {
     canonicalId = catalogId;
     canonicalLink = `https://www.mercadolivre.com.br/p/${catalogId}`;
   } else if (listingId) {
     canonicalId = listingId;
     canonicalLink = `https://produto.mercadolivre.com.br/${listingId.replace('MLB', 'MLB-')}`;
-  } else if (upId) {
-    canonicalId = upId;
+  } else {
+    // MLBU nunca será o ID principal
+    canonicalId = null;
+    canonicalLink = clean;
   }
 
   let groupId = catalogId || listingId || null;
 
+  // fallback estável quando só existe MLBU ou nenhum MLB confiável
   if (!groupId) {
-    const titleKey = slugify(title).slice(0, 80) || 'sem-titulo';
-    const imageKey = cleanUrl(image).split('/').pop()?.replace(/\.[a-z]+$/i, '') || 'sem-img';
+    const titleKey = slugify(title).slice(0, 60) || 'sem-titulo';
+    const imageKey =
+      cleanUrl(image).split('/').pop()?.replace(/\.[a-z]+$/i, '') || 'sem-imagem';
+
     groupId = `MLGROUP-${titleKey}-${imageKey}`;
   }
 
@@ -76,11 +82,13 @@ export function normalizeMercadoLivreLink(url = '', title = '', image = '') {
     canonicalId,
     canonicalLink,
     groupId,
+    variationId: upId || listingId || null,
+    catalogId: catalogId || null,
     rawIds: { catalogId, listingId, upId },
   };
 }
 
 export function extractMLB(link = '') {
   const normalized = normalizeMercadoLivreLink(link);
-  return normalized.canonicalId || normalized.rawIds.upId || null;
+  return normalized.canonicalId || null;
 }
